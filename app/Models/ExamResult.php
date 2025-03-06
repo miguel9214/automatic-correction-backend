@@ -9,16 +9,16 @@ class ExamResult extends Model
 {
     use HasFactory;
 
-        // Campos que se pueden asignar masivamente
-        protected $fillable = [
-            'exam_id',
-            'feedback',
-            'score',
-        ];
+    // Campos que se pueden asignar masivamente
+    protected $fillable = [
+        'exam_id',
+        'feedback',
+        'score',
+    ];
 
-        // Relación con el modelo Exam (un resultado pertenece a un examen)
-        public function exam()
-        {
-            return $this->belongsTo(Exam::class);
-        }
+    // Relación con el modelo Exam (un resultado pertenece a un examen)
+    public function exam()
+    {
+        return $this->belongsTo(Exam::class);
+    }
 }
