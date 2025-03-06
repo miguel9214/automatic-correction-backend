@@ -2,7 +2,8 @@
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
-
+use App\Http\Controllers\DeepSeekController;
+use App\Http\Controllers\ExamController;
 /*
 |--------------------------------------------------------------------------
 | API Routes
@@ -14,6 +15,7 @@ use Illuminate\Support\Facades\Route;
 |
 */
 
-Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
-    return $request->user();
-});
+Route::post('/upload-exams', [ExamController::class, 'uploadAndCorrect']);
+Route::get('/exams', [ExamController::class, 'getAllExams']);
+Route::post('/review-exams', [ExamController::class, 'reviewExams']);
+Route::post('/deepseek', [DeepSeekController::class, 'consultarDeepSeek']);
