@@ -20,6 +20,8 @@ class ExamController extends Controller
                 'exams' => 'required|array',
                 'exams.*.student_name' => 'required|string',
                 'exams.*.questions' => 'required|array',
+                'exams.*.questions.*.question' => 'required|string',
+                'exams.*.questions.*.answer' => 'required|string',
             ]);
 
             $results = [];
@@ -37,29 +39,34 @@ class ExamController extends Controller
                 // Crear el resultado del examen
                 $examResult = ExamResult::create([
                     'exam_id' => $exam->id,
-                    'feedback' => $feedback['feedback'],
+                    'feedback' => json_encode($feedback['detailed_feedback']),
                     'score' => $feedback['score'],
                 ]);
 
                 $results[] = [
                     'student_name' => $examData['student_name'],
-                    'feedback' => $feedback['feedback'],
+                    'feedback' => $feedback['detailed_feedback'],
                     'score' => $feedback['score'],
                 ];
             }
 
-            return response()->json($results);
+            return response()->json([
+                'success' => true,
+                'data' => $results,
+            ]);
         } catch (ValidationException $e) {
             // Capturar errores de validación
             return response()->json([
-                'error' => 'Error de validación',
+                'success' => false,
+                'error' => 'Validation Error',
                 'message' => $e->errors(),
             ], 422);
         } catch (\Exception $e) {
             // Capturar otros errores
             Log::error('Error en uploadAndCorrect: ' . $e->getMessage());
             return response()->json([
-                'error' => 'Error interno del servidor',
+                'success' => false,
+                'error' => 'Internal Server Error',
                 'message' => $e->getMessage(),
             ], 500);
         }
@@ -71,12 +78,27 @@ class ExamController extends Controller
         try {
             // Obtener todos los exámenes con sus resultados relacionados
             $exams = Exam::with('result')->get();
-            return response()->json($exams);
+
+            // Decodificar los campos JSON para la respuesta
+            $formattedExams = $exams->map(function ($exam) {
+                $examData = $exam->toArray();
+                $examData['questions'] = json_decode($exam->questions);
+                if ($exam->result) {
+                    $examData['result']['feedback'] = json_decode($exam->result->feedback);
+                }
+                return $examData;
+            });
+
+            return response()->json([
+                'success' => true,
+                'data' => $formattedExams,
+            ]);
         } catch (\Exception $e) {
             // Capturar errores
             Log::error('Error en getAllExams: ' . $e->getMessage());
             return response()->json([
-                'error' => 'Error interno del servidor',
+                'success' => false,
+                'error' => 'Internal Server Error',
                 'message' => $e->getMessage(),
             ], 500);
         }
@@ -86,29 +108,53 @@ class ExamController extends Controller
     public function reviewExams(Request $request)
     {
         try {
+            $request->validate([
+                'exam_ids' => 'required|array',
+                'exam_ids.*' => 'exists:exams,id',
+            ]);
+
             $examIds = $request->exam_ids;
             $results = [];
 
             foreach ($examIds as $examId) {
-                $exam = Exam::find($examId);
-                if (!$exam) {
-                    throw new \Exception("Examen con ID $examId no encontrado.");
-                }
+                $exam = Exam::findOrFail($examId);
+                $questions = json_decode($exam->questions, true);
 
-                $feedback = $this->sendToDeepSeek(json_decode($exam->questions, true));
+                $feedback = $this->sendToDeepSeek($questions);
+
+                // Actualizar el resultado del examen en la base de datos
+                ExamResult::updateOrCreate(
+                    ['exam_id' => $exam->id],
+                    [
+                        'feedback' => json_encode($feedback['detailed_feedback']),
+                        'score' => $feedback['score'],
+                    ]
+                );
+
                 $results[] = [
                     'student_name' => $exam->student_name,
-                    'feedback' => $feedback['feedback'],
+                    'feedback' => $feedback['detailed_feedback'],
                     'score' => $feedback['score'],
                 ];
             }
 
-            return response()->json($results);
+            return response()->json([
+                'success' => true,
+                'data' => $results,
+            ]);
+        } catch (ValidationException $e) {
+            // Capturar errores de validación
+            return response()->json([
+                'success' => false,
+                'error' => 'Validation Error',
+                'message' => $e->errors(),
+            ], 422);
         } catch (\Exception $e) {
-            // Capturar errores
+            // Capturar otros errores
             Log::error('Error en reviewExams: ' . $e->getMessage());
             return response()->json([
-                'error' => 'Error interno del servidor',
+                'success' => false,
+                'error' => 'Internal Server Error',
                 'message' => $e->getMessage(),
             ], 500);
         }
@@ -125,12 +171,33 @@ class ExamController extends Controller
 
             $url = 'https://api.deepseek.com/v1/chat/completions';
 
-            $messages = [];
-            foreach ($questions as $question) {
-                $messages[] = [
-                    'role' => 'user',
-                    'content' => "Pregunta: {$question['question']}\nRespuesta: {$question['answer']}",
-                ];
+            // Construir un prompt estructurado para obtener respuestas consistentes
+            $systemPrompt = "Eres un profesor experto en evaluación de exámenes. Tu tarea es evaluar las respuestas de los estudiantes y proporcionar retroalimentación detallada. Para cada pregunta, debes:
+            1. Determinar si la respuesta es correcta, parcialmente correcta o incorrecta.
+            2. Explicar por qué la respuesta es correcta o incorrecta.
+            3. Proporcionar la respuesta correcta si es necesario.
+            4. Asignar una puntuación de 0 a 10 para cada pregunta.
+
+            Responde en formato JSON con la siguiente estructura:
+            {
+              \"evaluations\": [
+                {
+                  \"question\": \"[Pregunta original]\",
+                  \"student_answer\": \"[Respuesta del estudiante]\",
+                  \"is_correct\": true/false/\"partial\",
+                  \"feedback\": \"[Tu retroalimentación detallada]\",
+                  \"points\": [puntuación de 0-10]
+                },
+                ...
+              ],
+              \"total_score\": [promedio de puntos en escala 0-100]
+            }";
+
+            // Construir el mensaje del usuario con todas las preguntas y respuestas
+            $userContent = "Evalúa las siguientes respuestas de examen:\n\n";
+            foreach ($questions as $index => $question) {
+                $userContent .= "Pregunta " . ($index + 1) . ": " . $question['question'] . "\n";
+                $userContent .= "Respuesta del estudiante: " . $question['answer'] . "\n\n";
             }
 
             $response = Http::withHeaders([
@@ -138,19 +205,35 @@ class ExamController extends Controller
                 'Content-Type' => 'application/json',
             ])->post($url, [
                 'model' => 'deepseek-chat',
-                'messages' => $messages,
+                'messages' => [
+                    ['role' => 'system', 'content' => $systemPrompt],
+                    ['role' => 'user', 'content' => $userContent]
+                ],
+                'response_format' => ['type' => 'json_object']
             ]);
 
             if ($response->failed()) {
                 throw new \Exception('Error al comunicarse con la API de DeepSeek: ' . $response->body());
             }
 
-            $feedback = $response->json()['choices'][0]['message']['content'];
-            $score = $this->calculateScore($feedback);
+            $responseContent = $response->json()['choices'][0]['message']['content'];
+            $parsedResponse = json_decode($responseContent, true);
+
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                // Si no se puede analizar como JSON, usar un formato de respuesta alternativo
+                Log::warning('La respuesta de DeepSeek no es un JSON válido: ' . $responseContent);
+                return [
+                    'detailed_feedback' => [
+                        'error' => 'No se pudo analizar la respuesta',
+                        'raw_response' => $responseContent
+                    ],
+                    'score' => 0
+                ];
+            }
 
             return [
-                'feedback' => $feedback,
-                'score' => $score,
+                'detailed_feedback' => $parsedResponse,
+                'score' => $parsedResponse['total_score'] ?? $this->calculateScoreFromEvaluations($parsedResponse['evaluations'] ?? [])
             ];
         } catch (\Exception $e) {
             // Capturar errores
@@ -159,17 +242,18 @@ class ExamController extends Controller
         }
     }
 
-    // Calcular la calificación
-    private function calculateScore($feedback)
+    // Calcular la calificación basada en las evaluaciones individuales
+    private function calculateScoreFromEvaluations($evaluations)
     {
-        try {
-            $correctCount = substr_count(strtolower($feedback), 'correcto');
-            $totalQuestions = substr_count(strtolower($feedback), 'pregunta');
-            return ($correctCount / max($totalQuestions, 1)) * 100;
-        } catch (\Exception $e) {
-            // Capturar errores
-            Log::error('Error en calculateScore: ' . $e->getMessage());
-            throw $e; // Relanzar la excepción para manejarla en el método que llama
+        if (empty($evaluations)) {
+            return 0;
         }
+
+        $totalPoints = 0;
+        foreach ($evaluations as $evaluation) {
+            $totalPoints += $evaluation['points'] ?? 0;
+        }
+
+        return ($totalPoints / (count($evaluations) * 10)) * 100;
     }
 }
