@@ -19,7 +19,7 @@ return [
 
 'paths' => ['api/*', 'sanctum/csrf-cookie'],
     'allowed_methods' => ['*'],
-    'allowed_origins' => ['http://localhost:5173'], // Permitir cualquier origen
+    'allowed_origins' => ['http://localhost:5173','https://automatic-correction.netlify.app/'], // Permitir cualquier origen
     'allowed_origins_patterns' => [],
     'allowed_headers' => ['*'],
     'exposed_headers' => [],
