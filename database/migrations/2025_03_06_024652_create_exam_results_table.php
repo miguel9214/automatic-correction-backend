@@ -13,7 +13,7 @@ return new class extends Migration
     {
         Schema::create('exam_results', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('exam_id')->constrained();
+            $table->foreignId('exam_id')->constrained()->onDelete('cascade');
             $table->string('feedback');
             $table->float('score');
             $table->timestamps();

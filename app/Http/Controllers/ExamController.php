@@ -169,9 +169,13 @@ class ExamController extends Controller
                 throw new \Exception('API Key de DeepSeek no configurada.');
             }
 
+            if (empty($questions) || !is_array($questions)) {
+                throw new \Exception('No hay preguntas para evaluar.');
+            }
+
             $url = 'https://api.deepseek.com/v1/chat/completions';
 
-            // Construir un prompt estructurado para obtener respuestas consistentes
+            // Prompt estructurado
             $systemPrompt = "Eres un profesor experto en evaluación de exámenes. Tu tarea es evaluar las respuestas de los estudiantes y proporcionar retroalimentación detallada. Para cada pregunta, debes:
             1. Determinar si la respuesta es correcta, parcialmente correcta o incorrecta.
             2. Explicar por qué la respuesta es correcta o incorrecta.
@@ -187,23 +191,26 @@ class ExamController extends Controller
                   \"is_correct\": true/false/\"partial\",
                   \"feedback\": \"[Tu retroalimentación detallada]\",
                   \"points\": [puntuación de 0-10]
-                },
-                ...
+                }
               ],
               \"total_score\": [promedio de puntos en escala 0-100]
             }";
 
-            // Construir el mensaje del usuario con todas las preguntas y respuestas
+            // Construcción del mensaje del usuario
             $userContent = "Evalúa las siguientes respuestas de examen:\n\n";
             foreach ($questions as $index => $question) {
+                if (!isset($question['question'], $question['answer'])) {
+                    continue; // Saltar preguntas mal estructuradas
+                }
                 $userContent .= "Pregunta " . ($index + 1) . ": " . $question['question'] . "\n";
                 $userContent .= "Respuesta del estudiante: " . $question['answer'] . "\n\n";
             }
 
+            // Llamada a la API de DeepSeek
             $response = Http::withHeaders([
                 'Authorization' => 'Bearer ' . $apiKey,
                 'Content-Type' => 'application/json',
-            ])->post($url, [
+            ])->timeout(120)->post($url, [
                 'model' => 'deepseek-chat',
                 'messages' => [
                     ['role' => 'system', 'content' => $systemPrompt],
@@ -212,15 +219,21 @@ class ExamController extends Controller
                 'response_format' => ['type' => 'json_object']
             ]);
 
+            // Verificar si la solicitud a la API falló
             if ($response->failed()) {
                 throw new \Exception('Error al comunicarse con la API de DeepSeek: ' . $response->body());
             }
 
-            $responseContent = $response->json()['choices'][0]['message']['content'];
+            // Obtener y validar la respuesta de la API
+            $responseData = $response->json();
+            if (!isset($responseData['choices'][0]['message']['content'])) {
+                throw new \Exception('Respuesta de la API DeepSeek inválida: ' . json_encode($responseData));
+            }
+
+            $responseContent = $responseData['choices'][0]['message']['content'];
             $parsedResponse = json_decode($responseContent, true);
 
-            if (json_last_error() !== JSON_ERROR_NONE) {
-                // Si no se puede analizar como JSON, usar un formato de respuesta alternativo
+            if (json_last_error() !== JSON_ERROR_NONE || !is_array($parsedResponse)) {
                 Log::warning('La respuesta de DeepSeek no es un JSON válido: ' . $responseContent);
                 return [
                     'detailed_feedback' => [
@@ -233,14 +246,23 @@ class ExamController extends Controller
 
             return [
                 'detailed_feedback' => $parsedResponse,
-                'score' => $parsedResponse['total_score'] ?? $this->calculateScoreFromEvaluations($parsedResponse['evaluations'] ?? [])
+                'score' => $parsedResponse['total_score'] ??
+                    (isset($parsedResponse['evaluations']) && is_array($parsedResponse['evaluations'])
+                        ? $this->calculateScoreFromEvaluations($parsedResponse['evaluations'])
+                        : 0)
             ];
         } catch (\Exception $e) {
-            // Capturar errores
+            // Capturar y registrar errores sin interrumpir la ejecución
             Log::error('Error en sendToDeepSeek: ' . $e->getMessage());
-            throw $e; // Relanzar la excepción para manejarla en el método que llama
+            return [
+                'detailed_feedback' => [
+                    'error' => $e->getMessage()
+                ],
+                'score' => 0
+            ];
         }
     }
+
 
     // Calcular la calificación basada en las evaluaciones individuales
     private function calculateScoreFromEvaluations($evaluations)
