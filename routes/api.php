@@ -23,10 +23,8 @@ Route::group([
 });
 
 Route::middleware('auth:api')->group(function () {
-
+    Route::post('/upload-exams', [ExamController::class, 'uploadAndCorrect']);
+    Route::get('/exams', [ExamController::class, 'getAllExams']);
+    Route::post('/review-exams', [ExamController::class, 'reviewExams']);
+    Route::post('/deepseek', [DeepSeekController::class, 'consultarDeepSeek']);
 });
-Route::post('/upload-exams', [ExamController::class, 'uploadAndCorrect']);
-Route::get('/exams', [ExamController::class, 'getAllExams']);
-Route::post('/review-exams', [ExamController::class, 'reviewExams']);
-
-Route::post('/deepseek', [DeepSeekController::class, 'consultarDeepSeek']);
