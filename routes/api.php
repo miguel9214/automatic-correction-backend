@@ -21,7 +21,7 @@ Route::group([
     Route::post('me', [AuthController::class, 'me']);
     Route::post('register', [AuthController::class, 'register']);
 });
-
+//API DE CONTROLADOR DE EXAMENES
 Route::middleware('auth:api')->group(function () {
     Route::post('/upload-exams', [ExamController::class, 'uploadAndCorrect']);
     Route::get('/exams', [ExamController::class, 'getAllExams']);
